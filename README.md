@@ -10,7 +10,7 @@ Requires **Node 18.18+** (Node 20 or 22 recommended).
 
 ```bash
 npm install
-npm run dev        # exercise browser for the React + performance exercises
+npm run dev        # exercise browser for every exercise and doc
 npm test js/01     # start practicing
 ```
 
@@ -39,7 +39,7 @@ To start an exercise over: `git checkout -- react/04-modal-dialog/index.tsx`. Ru
 | `npm test` | Vitest in watch mode on **your** code. Add a path filter: `npm test js/03` |
 | `npm run test:run` | Run all your tests once |
 | `npm run test:solution` | Run the same tests against the reference solutions. Add a filter: `npm run test:solution js/03` |
-| `npm run dev` | Exercise browser: each React/performance/AI exercise with fake data and a **My code / Solution** toggle |
+| `npm run dev` | Exercise browser: every exercise, quiz and design question with rendered markdown; React/performance/AI exercises also get a live demo with a **My code / Solution** toggle |
 | `npm run typecheck` | TypeScript check of the whole repo |
 
 Your stubs fail their tests at first. That's expected: `npm run test:run` will be mostly red until you solve things.
