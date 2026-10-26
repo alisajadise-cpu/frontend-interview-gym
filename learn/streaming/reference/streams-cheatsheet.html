@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Streams Cheat Sheet</title>
+  <link rel="stylesheet" href="../assets/course.css" />
+</head>
+<body>
+  <div class="kicker">Reference · Streaming in the browser</div>
+  <h1>Streams cheat sheet</h1>
+  <p class="lede">Reading a fetch body as it arrives, and turning bytes into text safely.</p>
+
+  <h2>The reader loop</h2>
+<pre><code>const reader = response.body.getReader();   // locks the stream to this reader
+const decoder = new TextDecoder();           // ONE per stream
+let text = '';
+try {
+  while (true) {
+    const { done, value } = await reader.read();   // value: Uint8Array
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();                  // flush leftover bytes
+} finally {
+  reader.releaseLock();                      // or reader.cancel() to stop early
+}</code></pre>
+
+  <h2><code>reader.read()</code> outcomes</h2>
+  <table>
+    <tr><th>Situation</th><th>Result</th></tr>
+    <tr><td>A chunk is available</td><td>resolves <code>{ value: chunk, done: false }</code></td></tr>
+    <tr><td>Stream closed</td><td>resolves <code>{ value: undefined, done: true }</code></td></tr>
+    <tr><td>Stream errored</td><td>rejects with the error</td></tr>
+  </table>
+  <p><small>Source: <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API/Using_readable_streams">MDN — Using readable streams</a></small></p>
+
+  <h2>Stopping a stream</h2>
+  <table>
+    <tr><th>Call</th><th>Effect</th></tr>
+    <tr><td><code>reader.cancel()</code></td><td>Discard the stream and any queued chunks. Use it when the consumer stops early.</td></tr>
+    <tr><td><code>reader.releaseLock()</code></td><td>Detach this reader so another reader can attach. The stream keeps going.</td></tr>
+    <tr><td><code>AbortController</code> on <code>fetch</code></td><td>Abort the whole request, e.g. a "Stop generating" button.</td></tr>
+  </table>
+
+  <h2>UTF-8 byte lengths</h2>
+  <table>
+    <tr><th>Character</th><th>Bytes</th></tr>
+    <tr><td>ASCII (<code>a</code>, <code>{</code>, <code>\n</code>)</td><td>1</td></tr>
+    <tr><td>Persian / Arabic (<code>س</code>)</td><td>2</td></tr>
+    <tr><td>Most other BMP (<code>€</code>, Chinese)</td><td>3</td></tr>
+    <tr><td>Emoji (<code>👋</code>)</td><td>4</td></tr>
+  </table>
+
+  <h2>Rules</h2>
+  <ul>
+    <li>Chunks are cut at <strong>byte</strong> positions: mid-character, mid-line, mid-event.</li>
+    <li>One <code>TextDecoder</code> per stream, <code>{ stream: true }</code> on every chunk, bare <code>decode()</code> at the end.<a class="cite" href="https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder/decode">[MDN]</a></li>
+    <li>A body can be consumed once: reader <em>or</em> <code>.json()</code>/<code>.text()</code>, not both.<a class="cite" href="https://javascript.info/fetch-progress">[javascript.info]</a></li>
+    <li><code>for await (const chunk of response.body)</code> works too; the reader gives you explicit <code>cancel()</code>.</li>
+  </ul>
+
+  <nav class="nav">
+    <a href="../lessons/0001-bytes-arrive-in-chunks.html">← Lesson 1: Bytes arrive in chunks</a>
+    <span></span>
+  </nav>
+</body>
+</html>

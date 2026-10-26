@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>From Chunks to Lines</title>
+  <link rel="stylesheet" href="../assets/course.css" />
+</head>
+<body>
+  <div class="kicker">Lesson 2 of 6 · Streaming in the browser</div>
+  <h1>From chunks to lines</h1>
+  <p class="lede">The server sends text line by line. The network cuts those lines into pieces. Today you put the lines back together. ~20 minutes.</p>
+
+  <div class="goal">
+    <strong>Your win today</strong>
+    Write <code>readLines(stream)</code>, which gives you whole lines, one at a time, no matter how the network cut them.
+  </div>
+
+  <h2>Warm-up from lesson 1</h2>
+  <p class="muted">Answer from memory, without scrolling back.</p>
+  <div class="widget">
+    <div class="quiz-q" data-correct="0" data-explain="A new decoder for each chunk can't see the other half of a character that was split.">
+      <p>Your loop calls <code>new TextDecoder().decode(chunk)</code> for every chunk of Persian text. What shows up?</p>
+      <div class="choices">
+        <button>� where characters were split</button>
+        <button>Nothing, it works the same</button>
+        <button>A TypeError about Uint8Array input</button>
+        <button>Numbers instead of any letters</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>What the server sends</h2>
+  <p>A chat API sends plain text, line by line.<a class="cite" href="https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events">[MDN]</a> For example:</p>
+<pre><code>data: {"content":"Hel"}
+                                ← an empty line
+data: {"content":"lo"}
+                                ← an empty line</code></pre>
+  <p>Each line ends with a <strong>line ending</strong>, the invisible character <code>\n</code>. In this lesson we write it out so you can see it. So the server really sends:</p>
+<pre><code>data: {"content":"Hel"}\n\ndata: {"content":"lo"}\n\n</code></pre>
+  <p>Lesson 3 explains what the lines mean. Today there's one job: <strong>get the lines out, one by one, exactly as the server sent them.</strong></p>
+
+  <h2>The problem</h2>
+  <p>Say the server sends two lines: <code>data: hello</code> and <code>data: world</code>. The network doesn't care about lines. It can deliver them as three chunks like this:</p>
+<pre><code>chunk 1:  "data: hel"
+chunk 2:  "lo\ndata: wor"
+chunk 3:  "ld\n"</code></pre>
+  <p>If you split each chunk on <code>\n</code> separately, you get <code>"data: hel"</code>, <code>"lo"</code>, <code>"data: wor"</code>, <code>"ld"</code>. All four are broken pieces, not lines.</p>
+
+  <h2>The fix: a buffer</h2>
+  <p>A <strong>buffer</strong> is a string variable where text waits until its line is complete. Think of it as a waiting room.</p>
+  <div class="callout">
+    <p><strong>The one rule:</strong> a line is complete only when you see its line ending. Text after the last line ending is not finished yet, so it stays in the buffer and waits for the next chunk.</p>
+  </div>
+  <p>Every time a chunk arrives, do three things:</p>
+  <ol>
+    <li><strong>Add</strong> the chunk to the end of the buffer.</li>
+    <li><strong>Take out</strong> every complete line from the front of the buffer.</li>
+    <li><strong>Keep</strong> whatever is left. It's an unfinished line.</li>
+  </ol>
+  <p>Here are the three chunks again, step by step:</p>
+  <table>
+    <tr><th>Chunk arrives</th><th>Buffer after adding it</th><th>Lines taken out</th><th>Buffer keeps</th></tr>
+    <tr><td><code>"data: hel"</code></td><td><code>"data: hel"</code></td><td>none (no <code>\n</code>)</td><td><code>"data: hel"</code></td></tr>
+    <tr><td><code>"lo\ndata: wor"</code></td><td><code>"data: hello\ndata: wor"</code></td><td><code>"data: hello"</code></td><td><code>"data: wor"</code></td></tr>
+    <tr><td><code>"ld\n"</code></td><td><code>"data: world\n"</code></td><td><code>"data: world"</code></td><td><code>""</code></td></tr>
+  </table>
+  <p>Now click through it yourself. The pink box explains each step in words:</p>
+
+  <div class="widget line-sim" data-title="Three chunks, two lines" data-chunks='["data: hel", "lo\ndata: wor", "ld\n"]' data-naive></div>
+
+  <p>In code, steps 1 to 3 look like this (for now, only <code>\n</code> endings):</p>
+<pre><code>buffer += decoder.decode(value, { stream: true });  // 1. add
+
+let end;
+while ((end = buffer.indexOf('\n')) !== -1) {      // is there a line ending?
+  yield buffer.slice(0, end);                       // 2. take out the line (without \n)
+  buffer = buffer.slice(end + 1);                   //    remove it from the buffer
+}
+                                                    // 3. whatever is left stays</code></pre>
+  <p>You've seen this idea before. In lesson 1, the <code>TextDecoder</code> kept half a character until the rest arrived. The buffer does the same thing for half a line. <em>Keep the unfinished part and wait for the rest</em>: that's the main trick of reading streams.</p>
+
+  <h2>Three kinds of line ending</h2>
+  <p>Different systems end lines differently. The SSE rules accept all three, and all three mean "this line is finished":<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream">[WHATWG]</a></p>
+  <table>
+    <tr><th>Ending</th><th>Name</th><th>Example</th></tr>
+    <tr><td><code>\n</code></td><td>line feed (most common)</td><td><code>"data: hi\n"</code></td></tr>
+    <tr><td><code>\r\n</code></td><td>carriage return + line feed (Windows style)</td><td><code>"data: hi\r\n"</code></td></tr>
+    <tr><td><code>\r</code></td><td>carriage return alone (rare)</td><td><code>"data: hi\r"</code></td></tr>
+  </table>
+  <p>Important: <code>\r\n</code> is <strong>one</strong> line ending made of two characters, not two line endings.</p>
+
+  <h2>The tricky case: <code>\r</code> at the end of the buffer</h2>
+  <p>Say chunk 1 is <code>"data: a\r"</code>. You see <code>\r</code> at the very end. What does it mean? There are two possibilities:</p>
+  <ul>
+    <li>Chunk 2 starts with <code>\n</code>. Then the <code>\r</code> was the first half of <code>\r\n</code>: <strong>one</strong> line ending.</li>
+    <li>Chunk 2 starts with anything else. Then the <code>\r</code> was a line ending on its own.</li>
+  </ul>
+  <p><strong>You can't tell yet.</strong> So you do what you always do with unfinished things: leave the <code>\r</code> in the buffer and wait for the next chunk.</p>
+  <p>What goes wrong if you don't wait? You treat <code>\r</code> as a line ending, then chunk 2's <code>\n</code> looks like a <em>second</em> line ending. That creates a fake empty line. In lesson 3 you'll see that an empty line means "the message is finished", so a fake one breaks messages in the wrong place.</p>
+  <p>When the stream ends, no chunk can follow, so a <code>\r</code> at the very end is simply a line ending.</p>
+
+  <div class="widget line-sim" data-title="A \r\n cut into two chunks" data-chunks='["data: a\r", "\ndata: b\r\n", "\r\n"]'></div>
+
+  <h2>Two more rules</h2>
+  <ul>
+    <li><strong>Empty lines count.</strong> <code>"a\n\nb\n"</code> has three lines: <code>"a"</code>, then <code>""</code> (empty), then <code>"b"</code>. Give the empty line back too, because next lesson it means "message finished".</li>
+    <li><strong>A line with no ending at the end of the stream is dropped.</strong> If the connection dies in the middle of a line, that line is incomplete. The SSE rules say to throw it away.<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream">[WHATWG]</a></li>
+  </ul>
+
+  <div class="widget line-sim" data-title="Empty lines, and a stream that stops mid-line" data-chunks='["data: 1\n\nda", "ta: 2\n\ndata: 3"]'></div>
+
+  <div class="callout">
+    <p><strong>Interview question:</strong> "Why not just split the text on <code>\n\n</code> to find messages?"</p>
+    <p><strong>A good answer:</strong> "Because the two <code>\n</code>s can arrive in different chunks, and line endings can also be <code>\r\n</code> or <code>\r</code>. I first collect whole lines with a buffer. Then an empty line tells me a message is finished."</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <div class="widget">
+    <div class="quiz-q" data-correct="0" data-explain="&quot;da&quot; has no line ending yet, so it waits in the buffer.">
+      <p>1. Chunks arrive as <code>"da"</code> then <code>"ta: hi\n"</code>. What is in the buffer after the <em>first</em> chunk?</p>
+      <div class="choices">
+        <button>"da"</button>
+        <button>""</button>
+        <button>"data: hi"</button>
+        <button>"da\n"</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="It might be the first half of \r\n. Only the next chunk (or the end of the stream) tells you.">
+      <p>2. The buffer ends with <code>\r</code> and more chunks are coming. What do you do?</p>
+      <div class="choices">
+        <button>Wait for the next chunk first</button>
+        <button>Emit the line immediately right now</button>
+        <button>Delete the carriage return and continue</button>
+        <button>Treat it as two separate lines</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="It never got a line ending, so it is not a complete line.">
+      <p>3. The stream ends. The buffer still holds <code>"data: bye"</code> with no line ending. What happens to it?</p>
+      <div class="choices">
+        <button>It is dropped, never yielded</button>
+        <button>It is yielded as normal</button>
+        <button>It throws a parse error</button>
+        <button>It waits for a reconnect</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="&quot;a&quot;, then an empty line. The empty line counts.">
+      <p>4. Which input gives exactly the lines <code>"a"</code> then <code>""</code>?</p>
+      <div class="choices">
+        <button>"a\n\n"</button>
+        <button>"a\n"</button>
+        <button>"a\r\n"</button>
+        <button>"\na\n"</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>Practice</h2>
+  <p>Write <code>readLines(stream)</code> as an <strong>async generator</strong> (<code>async function*</code>, which you already know): it <code>yield</code>s each complete line. Reading and decoding are lesson 1, so write them from memory. Press <kbd>⌘/Ctrl + Enter</kbd> to run the tests.</p>
+
+  <div class="widget code-task" data-task="readLines" data-fn="readLines">
+    <h3>Practice: readLines</h3>
+<textarea spellcheck="false">async function* readLines(stream) {
+  let buffer = '';
+
+  // 1. Read chunks and decode them to text (lesson 1).
+  //    Add each piece of text to the end of buffer.
+  //
+  // 2. After each chunk: take out every complete line and yield it.
+  //    A line ends with \n, \r\n or \r.
+  //    If buffer ENDS with \r, don't decide yet: wait for the next chunk.
+  //
+  // 3. When the stream ends: flush the decoder.
+  //    A \r at the very end now counts as a line ending.
+  //    Anything else left in buffer has no ending: drop it.
+}</textarea>
+    <details>
+      <summary>Hint 1: the shape</summary>
+      <p>Write a small helper inside: <code>function* takeLines(isEnd)</code>. It walks through <code>buffer</code>, yields each complete line, and at the end keeps only the leftover: <code>buffer = buffer.slice(start)</code>. Call <code>yield* takeLines(false)</code> after each chunk and <code>yield* takeLines(true)</code> after the stream ends.</p>
+    </details>
+    <details>
+      <summary>Hint 2: walking through the buffer</summary>
+<pre><code>let start = 0;                         // where the current line starts
+for (let i = 0; i &lt; buffer.length; i++) {
+  const ch = buffer[i];
+  if (ch === '\n') {
+    yield buffer.slice(start, i);      // the line, without its ending
+  } else if (ch === '\r') {
+    if (i === buffer.length - 1 &amp;&amp; !isEnd) break;   // last char: wait
+    yield buffer.slice(start, i);
+    if (buffer[i + 1] === '\n') i++;   // \r\n is ONE ending: skip the \n
+  } else {
+    continue;                          // normal character
+  }
+  start = i + 1;                       // next line starts after the ending
+}
+buffer = buffer.slice(start);          // keep only the unfinished part</code></pre>
+    </details>
+  </div>
+
+  <h2>Where this goes next</h2>
+  <p>You now have the first two layers of <a href="../../../ai/01-sse-parser/README.md"><code>ai/01-sse-parser</code></a>: bytes → text → lines (requirements 1 and 2). In <a href="0003-from-lines-to-events.html">lesson 3</a> the lines get meaning: <code>data:</code>, <code>event:</code>, <code>id:</code>, comments, and empty lines that finish a message.</p>
+
+  <div class="source">
+    <strong>Read this next</strong>
+    <a href="https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#event_stream_format">MDN — Event stream format</a>. It's short and shows real examples of the lines you'll parse in lesson 3. For a one-page summary of the buffer method, see the <a href="../reference/sse-parsing.html">SSE parsing reference</a>.
+  </div>
+
+  <div class="callout">
+    <p><strong>Still confused about something?</strong> Ask me in Claude Code, for example: "explain the buffer again with a different example", "why is \r\n one line ending?", or paste your <code>readLines</code> and ask me to check it. Tell me how the quiz and practice went, so lesson 3 lands at the right level.</p>
+  </div>
+
+  <nav class="nav">
+    <a href="0001-bytes-arrive-in-chunks.html">← Lesson 1: Bytes arrive in chunks</a>
+    <a href="0003-from-lines-to-events.html">Lesson 3: From lines to events →</a>
+  </nav>
+
+  <script src="../assets/quiz.js"></script>
+  <script src="../assets/line-sim.js"></script>
+  <script src="../assets/code-task.js"></script>
+  <script>
+    var K = window.StreamKit;
+    function linesOf(fn, stream) {
+      return K.collect(fn(stream));
+    }
+    window.CODE_TASKS = {
+      readLines: [
+        {
+          name: 'Two lines in one chunk',
+          run: async (fn) => K.same(await linesOf(fn, K.streamOfChunks(['a\nb\n'])), ['a', 'b']),
+        },
+        {
+          name: 'A line cut across chunks',
+          run: async (fn) => K.same(await linesOf(fn, K.streamOfChunks(['data: hel', 'lo\ndata: wor', 'ld\n'])), ['data: hello', 'data: world']),
+        },
+        {
+          name: 'Empty lines are given back as ""',
+          run: async (fn) => K.same(await linesOf(fn, K.streamOfChunks(['data: 1\n\ndata: 2\n\n'])), ['data: 1', '', 'data: 2', '']),
+        },
+        {
+          name: '\\r\\n and \\r line endings',
+          run: async (fn) => K.same(await linesOf(fn, K.streamOfChunks(['a\r\nb\rc\n'])), ['a', 'b', 'c']),
+        },
+        {
+          name: '\\r\\n cut into two chunks is ONE line ending',
+          run: async (fn) => K.same(await linesOf(fn, K.streamOfChunks(['a\r', '\nb\n'])), ['a', 'b'], 'An extra "" in the middle means the \\r and the \\n were counted as two endings.'),
+        },
+        {
+          name: '\\r at the end of a chunk, then a new line starts',
+          run: async (fn) => K.same(await linesOf(fn, K.streamOfChunks(['a\r', 'b\n'])), ['a', 'b']),
+        },
+        {
+          name: 'Persian, 1 byte per chunk, with \\r\\n',
+          run: async (fn) => K.same(await linesOf(fn, K.streamOf('data: سلام\r\n\r\n', 1)), ['data: سلام', '']),
+        },
+        {
+          name: 'A last line without a line ending is dropped',
+          run: async (fn) => K.same(await linesOf(fn, K.streamOfChunks(['a\nb'])), ['a']),
+        },
+        {
+          name: 'A \\r at the very end still ends the line',
+          run: async (fn) => K.same(await linesOf(fn, K.streamOfChunks(['a\r'])), ['a']),
+        },
+      ],
+    };
+  </script>
+</body>
+</html>

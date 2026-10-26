@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SSE Parsing Reference</title>
+  <link rel="stylesheet" href="../assets/course.css" />
+</head>
+<body>
+  <div class="kicker">Reference · Streaming in the browser</div>
+  <h1>SSE parsing, layer by layer</h1>
+  <p class="lede">An SSE parser is three layers stacked: bytes → text → lines → events. Each layer holds its incomplete part until more data arrives.</p>
+
+  <table>
+    <tr><th>Layer</th><th>Incomplete part it holds</th><th>Lesson</th></tr>
+    <tr><td>Bytes → text</td><td>A split multi-byte character (inside <code>TextDecoder</code>)</td><td><a href="../lessons/0001-bytes-arrive-in-chunks.html">1</a></td></tr>
+    <tr><td>Text → lines</td><td>A line with no ending yet, or a trailing <code>\r</code></td><td><a href="../lessons/0002-from-chunks-to-lines.html">2</a></td></tr>
+    <tr><td>Lines → events</td><td>Fields seen since the last empty line (data buffer, event type)</td><td><a href="../lessons/0003-from-lines-to-events.html">3</a></td></tr>
+  </table>
+
+  <h2>Text → lines</h2>
+<pre><code>async function* readLines(stream) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  function* takeLines(final) {
+    let start = 0;
+    for (let i = 0; i &lt; buffer.length; i++) {
+      const ch = buffer[i];
+      if (ch === '\n') {
+        yield buffer.slice(start, i);
+      } else if (ch === '\r') {
+        if (i === buffer.length - 1 &amp;&amp; !final) break; // maybe half of \r\n: wait
+        yield buffer.slice(start, i);
+        if (buffer[i + 1] === '\n') i++;                // \r\n is ONE ending
+      } else continue;
+      start = i + 1;
+    }
+    buffer = buffer.slice(start);                       // keep the unfinished tail
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    yield* takeLines(false);
+  }
+  buffer += decoder.decode();
+  yield* takeLines(true);
+  // leftover buffer = line with no ending → dropped
+}</code></pre>
+
+  <h2>Line rules</h2>
+  <table>
+    <tr><th>Rule</th><th>Why</th></tr>
+    <tr><td><code>\r\n</code>, <code>\n</code>, <code>\r</code> all end a line</td><td>Spec allows all three.<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream">[WHATWG]</a></td></tr>
+    <tr><td>Trailing <code>\r</code> waits for the next chunk</td><td>It may be half of a split <code>\r\n</code>. Guessing early creates a fake blank line.</td></tr>
+    <tr><td>Final <code>\r</code> at end of stream ends the line</td><td>No more data can follow it.</td></tr>
+    <tr><td>Blank lines are yielded as <code>""</code></td><td>A blank line dispatches an event.</td></tr>
+    <tr><td>Unterminated last line is dropped</td><td>"Once the end of the file is reached, any pending data must be discarded."<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream">[WHATWG]</a></td></tr>
+  </table>
+
+  <h2>Lines → events</h2>
+<pre><code>function* toEvents(lines) {
+  let data = '', type = '', lastId = '';
+  for (const line of lines) {
+    if (line === '') {                                   // empty line: send
+      if (data !== '') yield { event: type || 'message', data: data.slice(0, -1), id: lastId };
+      data = ''; type = '';                              // lastId is NOT reset
+      continue;
+    }
+    if (line.startsWith(':')) continue;                  // comment
+    const colon = line.indexOf(':');                     // FIRST colon
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? '' : line.slice(colon + 1);
+    if (value.startsWith(' ')) value = value.slice(1);   // ONE space
+    if (field === 'data') data += value + '\n';
+    else if (field === 'event') type = value;
+    else if (field === 'id') lastId = value;
+    // anything else (retry, unknown): ignore
+  }
+  // no empty line at the end → last event not sent
+}</code></pre>
+
+  <h2>Event rules</h2>
+  <table>
+    <tr><th>Line</th><th>Action</th></tr>
+    <tr><td><code>""</code> (empty)</td><td>Send <code>{ event: type || "message", data minus last \n, id: lastId }</code> if data isn't empty. Reset data and type.</td></tr>
+    <tr><td><code>:</code> at start</td><td>Comment (keep-alive). Ignore.</td></tr>
+    <tr><td><code>data: v</code></td><td><code>data += v + "\n"</code></td></tr>
+    <tr><td><code>event: v</code></td><td><code>type = v</code> (per event)</td></tr>
+    <tr><td><code>id: v</code></td><td><code>lastId = v</code> (stays; sent back as <code>Last-Event-ID</code> on reconnect)<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#the-last-event-id-header">[WHATWG]</a></td></tr>
+    <tr><td>no <code>:</code></td><td>Whole line is the field, value <code>""</code></td></tr>
+    <tr><td>other field</td><td>Ignore</td></tr>
+  </table>
+
+  <h2>Don't</h2>
+  <ul>
+    <li><code>chunk.split('\n')</code> per chunk: lines are cut across chunks.</li>
+    <li><code>text.split('\n\n')</code> for events: misses <code>\r\n\r\n</code>, and the two breaks may arrive in different chunks.</li>
+    <li>Strip all <code>\r</code> before splitting: breaks <code>\r</code>-only line endings.</li>
+  </ul>
+
+  <nav class="nav">
+    <a href="../lessons/0003-from-lines-to-events.html">← Lesson 3: From lines to events</a>
+    <a href="streams-cheatsheet.html">Streams cheat sheet →</a>
+  </nav>
+</body>
+</html>

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bytes Arrive in Chunks</title>
+  <link rel="stylesheet" href="../assets/course.css" />
+</head>
+<body>
+  <div class="kicker">Lesson 1 of 6 · Streaming in the browser</div>
+  <h1>Bytes arrive in chunks</h1>
+  <p class="lede">Before you can parse an LLM stream, you have to read one. This lesson takes you from <code>response.body</code> to correct text. ~15 minutes.</p>
+
+  <div class="goal">
+    <strong>Your win today</strong>
+    Write the reader loop from memory, and decode text that the network has cut in the middle of a character.
+  </div>
+
+  <h2>Why stream at all?</h2>
+  <p>You already know <code>await response.json()</code>. It waits until the <em>whole</em> body has arrived. An LLM may take 20 seconds to finish an answer, and nobody wants to stare at a spinner that long. So chat apps show words as they're generated.</p>
+  <p>The tool for that is <code>response.body</code>: a <code>ReadableStream</code> that hands you the body in pieces, as they arrive.<a class="cite" href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API/Using_readable_streams">[MDN]</a> Each piece is called a <strong>chunk</strong>.</p>
+
+  <h2>Reading a stream</h2>
+  <p>You get a <strong>reader</strong>, then call <code>read()</code> in a loop until it says <code>done</code>:</p>
+<pre><code>const response = await fetch('/api/chat', { method: 'POST', body });
+const reader = response.body.getReader();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;          // the server finished the body
+  console.log(value);       // Uint8Array(37) [123, 34, 99, ...]
+}</code></pre>
+  <p>Three facts to hold on to:</p>
+  <ul>
+    <li><code>value</code> is a <code>Uint8Array</code>: raw <strong>bytes</strong>, not text.<a class="cite" href="https://javascript.info/fetch-progress">[javascript.info]</a></li>
+    <li>Once you read the body this way, you can't call <code>response.json()</code> as well. A body is read once.<a class="cite" href="https://javascript.info/fetch-progress">[javascript.info]</a></li>
+    <li><code>for await (const chunk of response.body)</code> also works.<a class="cite" href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API/Using_readable_streams">[MDN]</a> The reader version gives you <code>reader.cancel()</code>, which you'll need later to stop a stream early.</li>
+  </ul>
+
+  <h2>Bytes are not characters</h2>
+  <p>Text travels as <strong>UTF-8</strong>, and UTF-8 uses a different number of bytes per character:</p>
+  <table>
+    <tr><th>Character</th><th>Example</th><th>Bytes</th></tr>
+    <tr><td>English letter</td><td><code>a</code></td><td>1</td></tr>
+    <tr><td>Persian / Arabic letter</td><td><code>س</code></td><td>2</td></tr>
+    <tr><td>Euro sign</td><td><code>€</code></td><td>3</td></tr>
+    <tr><td>Emoji</td><td><code>👋</code></td><td>4</td></tr>
+  </table>
+  <p>The network cuts the body wherever it likes, by byte count. It doesn't know or care where characters start. So a chunk can end <em>halfway through</em> <code>س</code>. Drag the slider and watch the dashed chunk boundaries:</p>
+
+  <div class="widget byte-sim" data-text="Hi سلام 👋" data-size="3"></div>
+
+  <p>The left side is what most people write first. Each chunk is decoded on its own, so a half character can't be decoded and becomes <code>�</code> (the "replacement character"). Set the chunk size to 1 and almost everything breaks.</p>
+
+  <h2>The fix: one decoder, <code>stream: true</code></h2>
+  <p>Create <strong>one</strong> <code>TextDecoder</code> for the whole stream and pass <code>{ stream: true }</code> on every chunk. That flag means "more data will follow".<a class="cite" href="https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder/decode">[MDN]</a> The decoder keeps any unfinished character's bytes and completes it when the next chunk arrives.</p>
+<pre><code>const decoder = new TextDecoder();          // ONE, outside the loop
+let text = '';
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  text += decoder.decode(value, { stream: true });
+}
+text += decoder.decode();                   // flush: "no more data is coming"</code></pre>
+  <p>The last <code>decoder.decode()</code>, with no arguments, says the stream is over. If a broken half character is still waiting, it comes out as <code>�</code> instead of disappearing silently.</p>
+
+  <div class="callout">
+    <p><strong>Interview question:</strong> "Why not <code>new TextDecoder().decode(chunk)</code> for each chunk?"</p>
+    <p><strong>Answer:</strong> "Chunks are cut at byte positions, not character boundaries. A multi-byte UTF-8 character like Persian text or an emoji can be split across two chunks. A new decoder per chunk can't see the other half and prints <code>�</code>. One decoder with <code>stream: true</code> buffers the partial bytes until the rest arrives."</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <p class="muted">Answer from memory before scrolling back up. Recalling it is what makes it stick.</p>
+  <div class="widget">
+    <div class="quiz-q" data-correct="0" data-explain="Fetch body chunks are Uint8Arrays. Turning them into text is your job.">
+      <p>1. After <code>await reader.read()</code> on a fetch body, what is <code>value</code>?</p>
+      <div class="choices">
+        <button>A Uint8Array of raw bytes</button>
+        <button>A string of decoded text</button>
+        <button>A parsed JSON object chunk</button>
+        <button>One complete line of text</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="The network splits by bytes. It knows nothing about characters, lines or events.">
+      <p>2. Where can a chunk boundary fall?</p>
+      <div class="choices">
+        <button>Anywhere, even inside one character</button>
+        <button>Only between two whole characters</button>
+        <button>Only right after a line ending</button>
+        <button>Only between two separate events</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="A new decoder per chunk never sees the other half of a split character.">
+      <p>3. Why does decoding each chunk with a new <code>TextDecoder</code> print <code>�</code>?</p>
+      <div class="choices">
+        <button>Each fresh decoder drops partial characters</button>
+        <button>TextDecoder only understands plain ASCII text</button>
+        <button>The server picked the wrong text encoding</button>
+        <button>Network chunks sometimes arrive out of order</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="It ends the stream: leftover bytes come out (as � if incomplete) instead of vanishing.">
+      <p>4. What does the final <code>decoder.decode()</code> with no arguments do?</p>
+      <div class="choices">
+        <button>Flushes bytes still held by decoder</button>
+        <button>Resets the decoder for another stream</button>
+        <button>Closes the underlying network connection now</button>
+        <button>Returns all the text decoded so far</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="3" data-explain="Emoji are 4 bytes in UTF-8, so even a 3-byte chunk can split one.">
+      <p>5. How many bytes is <code>👋</code> in UTF-8?</p>
+      <div class="choices">
+        <button>One byte</button>
+        <button>Two bytes</button>
+        <button>Three bytes</button>
+        <button>Four bytes</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>Practice</h2>
+  <p>Write <code>streamToText(stream)</code>. It reads a <code>ReadableStream</code> of bytes to the end and returns the full text. The tests send Persian and emoji in tiny chunks. Try to write it <em>without</em> scrolling up. Press <kbd>⌘/Ctrl + Enter</kbd> to run.</p>
+
+  <div class="widget code-task" data-task="streamToText" data-fn="streamToText">
+    <h3>Practice: streamToText</h3>
+<textarea spellcheck="false">async function streamToText(stream) {
+  const reader = stream.getReader();
+  let text = '';
+
+  // Your code here.
+
+  return text;
+}</textarea>
+    <details>
+      <summary>Hint 1</summary>
+      <p>You need three things: one decoder created before the loop, the <code>{ done, value }</code> loop, and one more <code>decode()</code> call after the loop.</p>
+    </details>
+    <details>
+      <summary>Hint 2 (if a test about a broken last character fails)</summary>
+      <p>Bytes the decoder is still holding only come out when you call <code>decoder.decode()</code> with no arguments at the end.</p>
+    </details>
+  </div>
+
+  <h2>Where this goes next</h2>
+  <p>You just wrote requirement 1 of <a href="../../../ai/01-sse-parser/README.md"><code>ai/01-sse-parser</code></a>. The next problem: the server sends <em>lines</em> like <code>data: hello</code>, and chunks cut those in half too. <a href="0002-from-chunks-to-lines.html">Lesson 2</a> handles turning text into lines across chunk boundaries, including the tricky <code>\r\n</code> split.</p>
+
+  <div class="source">
+    <strong>Read this next</strong>
+    <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API/Using_readable_streams">MDN — Using readable streams</a>. Read up to and including "Consuming a fetch using asynchronous iteration". It's the most reliable explanation of everything in this lesson. Cheat sheet: <a href="../reference/streams-cheatsheet.html">Streams cheat sheet</a>.
+  </div>
+
+  <div class="callout">
+    <p><strong>Stuck or curious?</strong> Ask me in Claude Code. For example: "why does the decoder hold bytes?", "what if I use for await instead?", or "check my streamToText". When you finish, tell me how the quiz and practice went, so I can pitch lesson 2 at the right level.</p>
+  </div>
+
+  <nav class="nav">
+    <a href="../reference/streams-cheatsheet.html">Cheat sheet</a>
+    <a href="0002-from-chunks-to-lines.html">Lesson 2: From chunks to lines →</a>
+  </nav>
+
+  <script src="../assets/quiz.js"></script>
+  <script src="../assets/byte-sim.js"></script>
+  <script src="../assets/code-task.js"></script>
+  <script>
+    var K = window.StreamKit;
+    window.CODE_TASKS = {
+      streamToText: [
+        {
+          name: 'ASCII in one chunk',
+          run: async (fn) => {
+            var got = await fn(K.streamOf('hello world', 64));
+            return { pass: got === 'hello world', detail: 'expected "hello world", got ' + K.show(got) };
+          },
+        },
+        {
+          name: 'Persian text, 1 byte per chunk',
+          run: async (fn) => {
+            var got = await fn(K.streamOf('سلام دنیا', 1));
+            return { pass: got === 'سلام دنیا', detail: 'expected "سلام دنیا", got ' + K.show(got) };
+          },
+        },
+        {
+          name: 'Emoji split across 3-byte chunks',
+          run: async (fn) => {
+            var want = 'Hi 👋🏽 bye €5';
+            var got = await fn(K.streamOf(want, 3));
+            return { pass: got === want, detail: 'expected ' + K.show(want) + ', got ' + K.show(got) };
+          },
+        },
+        {
+          name: 'Empty stream returns ""',
+          run: async (fn) => {
+            var got = await fn(K.streamOf('', 4));
+            return { pass: got === '', detail: 'expected "", got ' + K.show(got) };
+          },
+        },
+        {
+          name: 'Stream ends in the middle of a character → ends with �',
+          run: async (fn) => {
+            var bytes = new Uint8Array([0x61, 0x62, 0x63, 0xe2, 0x82]); // "abc" + first 2 bytes of "€"
+            var got = await fn(K.streamOf(bytes, 2));
+            return { pass: got === 'abc�', detail: 'expected "abc�", got ' + K.show(got) + ' (did you flush the decoder at the end?)' };
+          },
+        },
+        {
+          name: 'Reads the stream to the end',
+          run: async (fn) => {
+            var s = K.streamOf('x'.repeat(50), 5);
+            await fn(s);
+            return { pass: s.stats.reads === 10, detail: 'expected 10 chunks to be read, saw ' + s.stats.reads };
+          },
+        },
+      ],
+    };
+  </script>
+</body>
+</html>

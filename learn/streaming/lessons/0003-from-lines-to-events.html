@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>From Lines to Events</title>
+  <link rel="stylesheet" href="../assets/course.css" />
+</head>
+<body>
+  <div class="kicker">Lesson 3 of 6 · Streaming in the browser</div>
+  <h1>From lines to events</h1>
+  <p class="lede">You can get clean lines out of a stream. Now you'll learn what the lines mean, and group them into <strong>events</strong>: the messages your app actually uses. ~20 minutes.</p>
+
+  <div class="goal">
+    <strong>Your win today</strong>
+    Write <code>toEvents(lines)</code>, which turns lines like <code>data: hello</code> into events like <code>{ event: "message", data: "hello", id: "" }</code>.
+  </div>
+
+  <h2>Warm-up from lesson 2</h2>
+  <p class="muted">From memory. These are the two rules that were hardest last time.</p>
+  <div class="widget">
+    <div class="quiz-q" data-correct="0" data-explain="The stream is over, so no \n can follow. The \r is a line ending.">
+      <p>1. The stream has <strong>ended</strong>, and the buffer is <code>"a\r"</code>. What should <code>readLines</code> do?</p>
+      <div class="choices">
+        <button>Yield "a" as a line</button>
+        <button>Wait for one more chunk</button>
+        <button>Drop it as unfinished text</button>
+        <button>Yield "a\r" including the \r</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="After the loop, the buffer can still hold a line ending in \r. takeLines(true) takes it out.">
+      <p>2. Why does <code>readLines</code> call <code>takeLines(true)</code> after the reading loop?</p>
+      <div class="choices">
+        <button>To take out lines still waiting</button>
+        <button>To close the reader after reading</button>
+        <button>To decode the very first chunk</button>
+        <button>To start reading the next stream</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>The big picture</h2>
+  <p>An <strong>event</strong> is a group of lines that ends with an <strong>empty line</strong>. Here is a stream, already split into lines (lesson 2's job), and what it turns into:</p>
+  <table>
+    <tr><th>Lines from the server</th><th>Events you get</th></tr>
+    <tr>
+      <td><pre style="margin:0"><code>: keep-alive
+
+event: update
+id: 7
+data: first line
+data: second line
+
+data: hi
+</code></pre></td>
+      <td>
+        <p style="margin-top:0">nothing (a comment)</p>
+        <p><code>{ event: "update",<br>&nbsp;&nbsp;data: "first line\nsecond line",<br>&nbsp;&nbsp;id: "7" }</code></p>
+        <p style="margin-bottom:0"><code>{ event: "message",<br>&nbsp;&nbsp;data: "hi",<br>&nbsp;&nbsp;id: "7" }</code></p>
+      </td>
+    </tr>
+  </table>
+  <p>Notice two things. The second event has <code>id: "7"</code> even though it never sent an id. And its type is <code>"message"</code>, not <code>"update"</code>. The rules below explain both.</p>
+
+  <h2>Four kinds of line</h2>
+  <p>Every line is one of these:<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream">[WHATWG]</a></p>
+  <table>
+    <tr><th>The line…</th><th>Example</th><th>What to do</th></tr>
+    <tr><td>is empty</td><td><code>""</code></td><td>The event is finished: <strong>send it</strong></td></tr>
+    <tr><td>starts with <code>:</code></td><td><code>": keep-alive"</code></td><td>A comment. <strong>Ignore it.</strong> Servers send these so the connection doesn't time out.</td></tr>
+    <tr><td>has a <code>:</code></td><td><code>"data: hi"</code></td><td>Split into a <strong>field</strong> (<code>data</code>) and a <strong>value</strong> (<code>hi</code>)</td></tr>
+    <tr><td>has no <code>:</code></td><td><code>"data"</code></td><td>The whole line is the field. The value is <code>""</code>.</td></tr>
+  </table>
+
+  <h2>Splitting <code>field: value</code></h2>
+  <p>Two rules:</p>
+  <ol>
+    <li>Split at the <strong>first</strong> <code>:</code> only. The value can contain more colons, for example JSON.</li>
+    <li>If the value starts with a space, remove <strong>one</strong> space. Only one.</li>
+  </ol>
+  <table>
+    <tr><th>Line</th><th>Field</th><th>Value</th><th>Why</th></tr>
+    <tr><td><code>"data: hi"</code></td><td><code>data</code></td><td><code>"hi"</code></td><td>one space removed</td></tr>
+    <tr><td><code>"data:hi"</code></td><td><code>data</code></td><td><code>"hi"</code></td><td>no space to remove</td></tr>
+    <tr><td><code>"data:  hi"</code></td><td><code>data</code></td><td><code>" hi"</code></td><td>only ONE of the two spaces is removed</td></tr>
+    <tr><td><code>'data: {"a":1}'</code></td><td><code>data</code></td><td><code>'{"a":1}'</code></td><td>split at the first <code>:</code> only</td></tr>
+    <tr><td><code>"data"</code></td><td><code>data</code></td><td><code>""</code></td><td>no <code>:</code> at all</td></tr>
+  </table>
+
+  <h2>Three variables, three fields</h2>
+  <p>The parser keeps three variables while it reads. Each field changes one of them:</p>
+  <table>
+    <tr><th>Field</th><th>Variable</th><th>What it does</th></tr>
+    <tr><td><code>data</code></td><td>data buffer</td><td><strong>Add</strong> the value and a <code>\n</code> to the end. Several <code>data</code> lines build one multi-line message.</td></tr>
+    <tr><td><code>event</code></td><td>event type</td><td><strong>Set</strong> the type. If it's never set, the event's type is <code>"message"</code>.</td></tr>
+    <tr><td><code>id</code></td><td>last id</td><td><strong>Set</strong> the id. It <strong>stays</strong> for every later event until the server sends a new one.</td></tr>
+    <tr><td>anything else</td><td>none</td><td>Ignore it (for example <code>retry</code>).</td></tr>
+  </table>
+  <p>Field names must match exactly: <code>Data:</code> with a capital D is not <code>data</code>.<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream">[WHATWG]</a></p>
+
+  <h2>The empty line: send the event</h2>
+  <p>When you read an empty line:</p>
+  <ol>
+    <li><strong>If the data buffer is empty, send nothing.</strong> An event with no data isn't sent.</li>
+    <li>Otherwise send <code>{ event: type || "message", data, id: lastId }</code>, but first <strong>remove the last <code>\n</code></strong> from data. Every <code>data</code> line added a <code>\n</code>, so there's always one extra at the end.</li>
+    <li>Either way, <strong>reset the data buffer and the event type to <code>""</code></strong>. Don't reset the last id.<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#dispatchMessage">[WHATWG]</a></li>
+  </ol>
+  <p>So the type is per event, but the id carries over. That explains both things you noticed in the big picture.</p>
+  <p>Now step through the big-picture stream yourself. Watch the three variables change:</p>
+
+  <div class="widget event-sim" data-title="The big-picture stream, line by line" data-lines='[": keep-alive", "", "event: update", "id: 7", "data: first line", "data: second line", "", "data: hi", ""]'></div>
+
+  <p>One last rule: if the stream ends and the last event never got its empty line, <strong>don't send it</strong>. It might be cut off.<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream">[WHATWG]</a> You get this for free, because you only send on an empty line.</p>
+
+  <div class="widget event-sim" data-title="Tricky cases: spaces, no colon, no data, cut off" data-lines='["data:  two spaces", "data", "", "event: ping", "", "retry: 3000", "data: cut off"]'></div>
+
+  <div class="callout">
+    <p><strong>Interview question:</strong> "What is the <code>id</code> field for?"</p>
+    <p><strong>A good answer:</strong> "Resuming. The browser remembers the last id. If the connection drops, the browser's <code>EventSource</code> reconnects and sends it in a <code>Last-Event-ID</code> header, so the server can continue from there.<a class="cite" href="https://html.spec.whatwg.org/multipage/server-sent-events.html#the-last-event-id-header">[WHATWG]</a> That's why the id stays after each event instead of being reset."</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <div class="widget">
+    <div class="quiz-q" data-correct="0" data-explain="Only ONE space after the colon is removed.">
+      <p>1. The line is <code>data:  hi</code> (two spaces). What is the value?</p>
+      <div class="choices">
+        <button>" hi"</button>
+        <button>"hi"</button>
+        <button>"  hi"</button>
+        <button>"data:  hi"</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="The event type is reset after every event. With no type set, it's &quot;message&quot;.">
+      <p>2. Lines: <code>event: add</code>, <code>data: x</code>, <code>""</code>, <code>data: y</code>, <code>""</code>. What is the <em>second</em> event's type?</p>
+      <div class="choices">
+        <button>"message"</button>
+        <button>"add"</button>
+        <button>""</button>
+        <button>"y"</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="The last id is never reset. It stays until the server sends a new one.">
+      <p>3. Lines: <code>id: 7</code>, <code>data: a</code>, <code>""</code>, <code>data: b</code>, <code>""</code>. What is the <em>second</em> event's id?</p>
+      <div class="choices">
+        <button>"7"</button>
+        <button>""</button>
+        <button>"8"</button>
+        <button>"b"</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="No data line was seen, so the data buffer is empty and nothing is sent.">
+      <p>4. Lines: <code>event: ping</code>, then <code>""</code>. What is sent?</p>
+      <div class="choices">
+        <button>Nothing, the data is empty</button>
+        <button>One event with empty data</button>
+        <button>One event of type ping</button>
+        <button>An error about missing data</button>
+      </div>
+    </div>
+    <div class="quiz-q" data-correct="0" data-explain="Each data line adds value + \n, so the buffer always ends with one \n too many.">
+      <p>5. Why remove the last <code>\n</code> from data before sending?</p>
+      <div class="choices">
+        <button>Every data line added one extra</button>
+        <button>JSON.parse always fails on any newline</button>
+        <button>The spec forbids newlines in data</button>
+        <button>It saves memory for long streams</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>Practice</h2>
+  <p>Write <code>toEvents(lines)</code>. It gets an <strong>array of lines</strong> (already split, like <code>readLines</code> gives you) and <code>yield</code>s events. It's a normal generator (<code>function*</code>), because there's no waiting yet. Lesson 4 connects it to the stream.</p>
+
+  <div class="widget code-task" data-task="toEvents" data-fn="toEvents">
+    <h3>Practice: toEvents</h3>
+<textarea spellcheck="false">function* toEvents(lines) {
+  let data = '';    // the data buffer
+  let type = '';    // the event type
+  let lastId = '';  // the last id (stays between events)
+
+  for (const line of lines) {
+    // 1. Empty line:
+    //    if data is not empty, yield { event, data, id } (remove the last \n from data).
+    //    Then reset data and type to ''. Keep lastId.
+    //
+    // 2. Starts with ':' → a comment. Skip it (continue).
+    //
+    // 3. Split into field and value at the FIRST ':'.
+    //    No ':' → field is the whole line, value is ''.
+    //    If value starts with ' ', remove ONE space.
+    //
+    // 4. field 'data' → data += value + '\n'
+    //    field 'event' → type = value
+    //    field 'id' → lastId = value
+    //    anything else → ignore
+  }
+  // After the loop: do nothing. An event with no empty line is not sent.
+}</textarea>
+    <details>
+      <summary>Hint 1: sending an event</summary>
+<pre><code>if (line === '') {
+  if (data !== '') {
+    yield { event: type || 'message', data: data.slice(0, -1), id: lastId };
+  }
+  data = '';
+  type = '';
+  continue;
+}</code></pre>
+    </details>
+    <details>
+      <summary>Hint 2: splitting field and value</summary>
+<pre><code>const colon = line.indexOf(':');
+const field = colon === -1 ? line : line.slice(0, colon);
+let value = colon === -1 ? '' : line.slice(colon + 1);
+if (value.startsWith(' ')) value = value.slice(1);</code></pre>
+    </details>
+  </div>
+
+  <h2>Where this goes next</h2>
+  <p>You now have all three layers of <a href="../../../ai/01-sse-parser/README.md"><code>ai/01-sse-parser</code></a>: bytes → text (lesson 1), text → lines (lesson 2), lines → events (today). Lesson 4 joins them into one <code>parseSSE(stream)</code> and handles stopping early. After that you can pass most of the exercise's tests.</p>
+
+  <div class="source">
+    <strong>Read this next</strong>
+    <a href="https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#event_stream_format">MDN — Event stream format</a>. Short, with examples of every field you learned today. For the summary of all three layers, see the <a href="../reference/sse-parsing.html">SSE parsing reference</a>.
+  </div>
+
+  <div class="callout">
+    <p><strong>Still confused about something?</strong> Ask me in Claude Code, for example: "why is the type reset but the id is not?", "explain the empty line rule with another example", or paste your <code>toEvents</code> and ask me to check it.</p>
+  </div>
+
+  <nav class="nav">
+    <a href="0002-from-chunks-to-lines.html">← Lesson 2: From chunks to lines</a>
+    <a href="../reference/sse-parsing.html">SSE parsing reference →</a>
+  </nav>
+
+  <script src="../assets/quiz.js"></script>
+  <script src="../assets/event-sim.js"></script>
+  <script src="../assets/code-task.js"></script>
+  <script>
+    var K = window.StreamKit;
+    // Key order in your objects doesn't matter: events are normalised before comparing.
+    async function eventsOf(fn, lines) {
+      var got = await K.collect(fn(lines));
+      return got.map(function (e) {
+        return e && typeof e === 'object' ? { event: e.event, data: e.data, id: e.id } : e;
+      });
+    }
+    function msg(data, extra) {
+      return Object.assign({ event: 'message', data: data, id: '' }, extra || {});
+    }
+    function test(name, lines, want, note) {
+      return {
+        name: name,
+        run: async function (fn) {
+          var r = K.same(await eventsOf(fn, lines), want, note);
+          r.detail = 'input lines: ' + JSON.stringify(lines) + '\n' + r.detail;
+          return r;
+        },
+      };
+    }
+    window.CODE_TASKS = {
+      toEvents: [
+        test('One event', ['data: hello', ''], [msg('hello')]),
+        test('event and id fields; id stays, type resets', ['event: delta', 'id: 7', 'data: a', '', 'data: b', ''], [msg('a', { event: 'delta', id: '7' }), msg('b', { id: '7' })]),
+        test('Several data lines are joined with \\n', ['data: line 1', 'data: line 2', ''], [msg('line 1\nline 2')]),
+        test('Comments and unknown fields are ignored; only ONE space removed', [': keep-alive', 'retry: 3000', 'foo: bar', 'data:  two spaces', 'data:none', ''], [msg(' two spaces\nnone')]),
+        test('Split at the FIRST colon only (JSON value)', ['data: {"a":1}', ''], [msg('{"a":1}')]),
+        test('A line with no colon is a field with an empty value', ['data', 'data', ''], [msg('\n')], 'Two "data" lines with empty values: the buffer is "\\n\\n", minus the last \\n.'),
+        test('No data → nothing sent (and the type is still reset)', ['event: ping', '', ': comment', '', 'data: x', ''], [msg('x')]),
+        test('Last event without an empty line is not sent', ['data: complete', '', 'data: cut off'], [msg('complete')]),
+      ],
+    };
+  </script>
+</body>
+</html>
