@@ -4,7 +4,11 @@
 
 ## The bug report
 
-> The catalog has 5,000 products. Typing a coupon code lags. Search feels heavy. A customer set quantity **5** on "Banana", changed the sort order, and the 5 moved to a different product. QA also says the product list in the Redux store is in a different order after visiting this page.
+> The catalog has 5,000 products. Typing a coupon code lags. Search feels heavy. A customer set quantity **5** on one product, changed the sort order, and the 5 moved to a different product. QA also says the product list in the Redux store is in a different order after visiting this page.
+
+The **coupon code** field is not a product, and it doesn't apply a discount. It's a plain text box that saves what you type into state. It's there to show the problem: typing in a box that has nothing to do with the products should not re-render or re-sort them.
+
+The tests use a small catalog (Apple, Apricot, Banana, Cherry, Kiwi, Mango). The demo in `npm run dev` uses 5,000 generated products like "Red Lamp #0".
 
 `index.tsx` is the production component. It renders the right products, but it has **at least 7 problems**.
 

@@ -49,14 +49,14 @@ export function ProductGrid({ products, helpers = defaultHelpers }: { products: 
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <input aria-label="Search products" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input aria-label="Search products" placeholder="Search products…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <select aria-label="Sort by" value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}>
           <option value="name">Name</option>
           <option value="price-asc">Price: low to high</option>
           <option value="price-desc">Price: high to low</option>
           <option value="rating">Rating</option>
         </select>
-        <input aria-label="Coupon code" value={coupon} onChange={(e) => setCoupon(e.target.value)} />
+        <input aria-label="Coupon code" placeholder="Coupon code" value={coupon} onChange={(e) => setCoupon(e.target.value)} />
         <CartBadge count={cartCount} />
       </div>
       <ul

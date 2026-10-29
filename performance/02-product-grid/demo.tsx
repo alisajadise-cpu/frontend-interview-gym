@@ -27,9 +27,19 @@ export default function Demo({ impl }: DemoProps<typeof Mod>) {
       <p style={{ fontSize: 13 }}>
         {counts} <button onClick={resetProbes}>reset</button>
       </p>
-      <p style={{ fontSize: 13, color: 'gray' }}>
-        Try: type in "Coupon code", set a quantity then change the sort, type fast in search.
-      </p>
+      <ul style={{ fontSize: 13, color: 'gray', margin: '0 0 12px', paddingLeft: 18 }}>
+        <li>
+          <b>Coupon code</b> box: type anything (e.g. SAVE10). It only stores the text, it applies no discount. That's on purpose:
+          typing in an unrelated box should <i>not</i> re-render 5,000 cards. Watch the ProductCard counter.
+        </li>
+        <li>
+          <b>Quantity bug:</b> set quantity 5 on the first card, then change the sort. With <i>My code</i> the 5 stays in the first
+          slot and moves to a different product.
+        </li>
+        <li>
+          <b>Search</b> box: type fast and feel the lag.
+        </li>
+      </ul>
       <div style={{ maxHeight: 500, overflow: 'auto' }}>
         <impl.ProductGrid products={products} />
       </div>
