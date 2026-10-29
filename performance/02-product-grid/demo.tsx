@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { probeCount, resetProbes } from '../../shared/probe';
+import { useMemo } from 'react';
+import { ProbeCounter } from '../../shared/ProbeCounter';
 import type { DemoProps } from '../../shared/demo';
 import type * as Mod from './index';
 
@@ -17,15 +17,10 @@ export default function Demo({ impl }: DemoProps<typeof Mod>) {
       })),
     [],
   );
-  const [counts, setCounts] = useState('');
-  useEffect(() => {
-    const id = setInterval(() => setCounts(`ProductCard renders: ${probeCount('ProductCard')} · CartBadge renders: ${probeCount('CartBadge')}`), 300);
-    return () => clearInterval(id);
-  }, []);
   return (
     <div>
       <p style={{ fontSize: 13 }}>
-        {counts} <button onClick={resetProbes}>reset</button>
+        <ProbeCounter names={{ 'ProductCard renders': 'ProductCard', 'CartBadge renders': 'CartBadge' }} />
       </p>
       <ul style={{ fontSize: 13, color: 'gray', margin: '0 0 12px', paddingLeft: 18 }}>
         <li>
